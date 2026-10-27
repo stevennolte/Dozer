@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <title>Dozer</title>
+  <style>
+    :root {
+      --bg: #121212;
+      --ink: #f2f2f2;
+      --muted: #9a9a9a;
+      --accent: #f5a623;
+      --stop: #b00020;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: system-ui, sans-serif;
+      user-select: none;
+      overscroll-behavior: none;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+      padding: 20px;
+      gap: 16px;
+    }
+    h1 { margin: 0; font-size: 2rem; letter-spacing: 0.04em; }
+    #status { color: var(--muted); min-height: 1.4em; }
+    #status.ok { color: var(--accent); }
+    #status.err { color: #ff8a80; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 14px 20px;
+      font-size: 1rem;
+      font-weight: 700;
+      color: #111;
+      background: var(--accent);
+    }
+    button.ghost { background: #2a2a2a; color: var(--ink); }
+    button.ghost.active { background: var(--accent); color: #111; }
+    button.stop {
+      background: var(--stop);
+      color: #fff;
+      width: 100%;
+      min-height: 64px;
+      font-size: 1.2rem;
+    }
+    button:disabled { opacity: 0.45; }
+    .view.hidden { display: none !important; }
+    #drive {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-height: 0;
+    }
+    #pad-wrap {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 240px;
+    }
+    #pad {
+      width: min(80vw, 80vh, 420px);
+      height: min(80vw, 80vh, 420px);
+      border-radius: 50%;
+      background: #2c2c2c;
+      border: 6px solid var(--accent);
+      position: relative;
+      touch-action: none;
+    }
+    #knob {
+      width: 28%;
+      height: 28%;
+      border-radius: 50%;
+      background: var(--accent);
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+    #values { text-align: center; font-variant-numeric: tabular-nums; color: var(--muted); }
+    #diag {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .pin {
+      background: #1c1c1c;
+      border-radius: 12px;
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .pin header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+    }
+    .pin label { font-weight: 700; }
+    .pin small { color: var(--muted); font-weight: 400; }
+    .pin input[type="range"] { width: 100%; touch-action: pan-y; }
+    .warn { color: var(--muted); font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>Dozer</h1>
+  <div id="status">Disconnected</div>
+  <div class="row">
+    <button id="connect">Connect</button>
+    <button id="disconnect" class="ghost" disabled>Disconnect</button>
+  </div>
+  <div class="row">
+    <button id="tab-drive" class="ghost active">Drive</button>
+    <button id="tab-diag" class="ghost">Diagnostics</button>
+  </div>
+
+  <div id="drive" class="view">
+    <div id="values">L 0 &nbsp; R 0</div>
+    <div id="pad-wrap">
+      <div id="pad"><div id="knob"></div></div>
+    </div>
+  </div>
+
+  <div id="diag" class="view hidden">
+    <p class="warn">Each IN pin is PWM 0–255. Do not turn on both directions of the same motor at once.</p>
+    <div class="pin">
+      <header>
+        <label><input type="checkbox" data-pin="0" /> IN1 <small>GPIO 14 · left fwd</small></label>
+        <span data-val="0">0</span>
+      </header>
+      <input type="range" min="0" max="255" value="255" data-pwm="0" />
+    </div>
+    <div class="pin">
+      <header>
+        <label><input type="checkbox" data-pin="1" /> IN2 <small>GPIO 13 · left rev</small></label>
+        <span data-val="1">0</span>
+      </header>
+      <input type="range" min="0" max="255" value="255" data-pwm="1" />
+    </div>
+    <div class="pin">
+      <header>
+        <label><input type="checkbox" data-pin="2" /> IN3 <small>GPIO 12 · right fwd</small></label>
+        <span data-val="2">0</span>
+      </header>
+      <input type="range" min="0" max="255" value="255" data-pwm="2" />
+    </div>
+    <div class="pin">
+      <header>
+        <label><input type="checkbox" data-pin="3" /> IN4 <small>GPIO 11 · right rev</small></label>
+        <span data-val="3">0</span>
+      </header>
+      <input type="range" min="0" max="255" value="255" data-pwm="3" />
+    </div>
+  </div>
+
+  <button id="estop" class="stop" type="button">E-STOP</button>
+
+  <script>
+    const SERVICE = "d02e0001-1212-efde-1523-785feabcd123";
+    const DRIVE = "d02e0002-1212-efde-1523-785feabcd123";
+    const STOP = "d02e0003-1212-efde-1523-785feabcd123";
+    const PINS = "d02e0004-1212-efde-1523-785feabcd123";
+    const STICK_FULL_AT = 0.9;
+
+    const statusEl = document.getElementById("status");
+    const valuesEl = document.getElementById("values");
+    const pad = document.getElementById("pad");
+    const knob = document.getElementById("knob");
+    const connectBtn = document.getElementById("connect");
+    const disconnectBtn = document.getElementById("disconnect");
+    const driveView = document.getElementById("drive");
+    const diagView = document.getElementById("diag");
+    const tabDrive = document.getElementById("tab-drive");
+    const tabDiag = document.getElementById("tab-diag");
+
+    let device = null;
+    let driveChar = null;
+    let stopChar = null;
+    let pinsChar = null;
+    let left = 0;
+    let right = 0;
+    let touching = false;
+    let driveTimer = null;
+    let pinsTimer = null;
+    let page = "drive";
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      statusEl.className = kind || "";
+    }
+
+    function arcadeMix(x, y) {
+      let l = y + x;
+      let r = y - x;
+      const mag = Math.max(Math.abs(l), Math.abs(r));
+      if (mag > 1) {
+        l /= mag;
+        r /= mag;
+      }
+      return [
+        Math.max(-127, Math.min(127, Math.round(l * 127))),
+        Math.max(-127, Math.min(127, Math.round(r * 127))),
+      ];
+    }
+
+    function int8Bytes(a, b) {
+      return new Uint8Array(new Int8Array([a, b]).buffer);
+    }
+
+    async function writeDrive(l, r) {
+      if (!driveChar) return;
+      try {
+        await driveChar.writeValueWithoutResponse(int8Bytes(l, r));
+      } catch (_) {}
+    }
+
+    function pinDuties() {
+      const duties = [0, 0, 0, 0];
+      document.querySelectorAll("input[data-pin]").forEach((box) => {
+        const i = Number(box.dataset.pin);
+        const slider = document.querySelector(`input[data-pwm="${i}"]`);
+        duties[i] = box.checked ? Number(slider.value) : 0;
+        document.querySelector(`[data-val="${i}"]`).textContent = String(duties[i]);
+      });
+      return duties;
+    }
+
+    async function writePins() {
+      if (!pinsChar) return;
+      try {
+        await pinsChar.writeValueWithoutResponse(new Uint8Array(pinDuties()));
+      } catch (_) {}
+    }
+
+    async function writeStop() {
+      if (stopChar) {
+        try { await stopChar.writeValueWithoutResponse(new Uint8Array()); } catch (_) {}
+      }
+      await writeDrive(0, 0);
+    }
+
+    function showStick(x, y, l, r) {
+      const radius = pad.clientWidth / 2;
+      knob.style.transform = `translate(calc(-50% + ${x * radius * 0.65}px), calc(-50% + ${-y * radius * 0.65}px))`;
+      valuesEl.textContent = `L ${l}   R ${r}`;
+    }
+
+    function setStick(x, y, isTouch) {
+      if (page !== "drive") return;
+      touching = isTouch;
+      if (!isTouch) {
+        stopDriveLoop();
+        left = 0;
+        right = 0;
+        showStick(0, 0, 0, 0);
+        writeStop();
+        return;
+      }
+      [left, right] = arcadeMix(x, y);
+      showStick(x, y, left, right);
+      ensureDriveLoop();
+    }
+
+    function ensureDriveLoop() {
+      if (driveTimer) return;
+      driveTimer = setInterval(() => {
+        if (touching) writeDrive(left, right);
+      }, 50);
+    }
+
+    function stopDriveLoop() {
+      if (driveTimer) {
+        clearInterval(driveTimer);
+        driveTimer = null;
+      }
+    }
+
+    function ensurePinsLoop() {
+      if (pinsTimer) return;
+      pinsTimer = setInterval(() => {
+        if (page === "diag") writePins();
+      }, 50);
+    }
+
+    function stopPinsLoop() {
+      if (pinsTimer) {
+        clearInterval(pinsTimer);
+        pinsTimer = null;
+      }
+    }
+
+    function showPage(name) {
+      page = name;
+      driveView.classList.toggle("hidden", name !== "drive");
+      diagView.classList.toggle("hidden", name !== "diag");
+      tabDrive.classList.toggle("active", name === "drive");
+      tabDiag.classList.toggle("active", name === "diag");
+      if (name === "diag") {
+        touching = false;
+        stopDriveLoop();
+        showStick(0, 0, 0, 0);
+        pinDuties();
+        ensurePinsLoop();
+        writePins();
+      } else {
+        stopPinsLoop();
+        document.querySelectorAll("input[data-pin]").forEach((box) => { box.checked = false; });
+        pinDuties();
+        writeStop();
+      }
+    }
+
+    function pointFromEvent(ev) {
+      const rect = pad.getBoundingClientRect();
+      const t = ev.touches ? ev.touches[0] : ev;
+      const reach = (rect.width / 2) * STICK_FULL_AT;
+      let x = (t.clientX - rect.left - rect.width / 2) / reach;
+      let y = (rect.height / 2 - (t.clientY - rect.top)) / reach;
+      const mag = Math.hypot(x, y);
+      if (mag > 1) {
+        x /= mag;
+        y /= mag;
+      }
+      return [x, y];
+    }
+
+    pad.addEventListener("pointerdown", (ev) => {
+      pad.setPointerCapture(ev.pointerId);
+      const [x, y] = pointFromEvent(ev);
+      setStick(x, y, true);
+    });
+    pad.addEventListener("pointermove", (ev) => {
+      if (!touching) return;
+      const [x, y] = pointFromEvent(ev);
+      setStick(x, y, true);
+    });
+    function endStick() { setStick(0, 0, false); }
+    pad.addEventListener("pointerup", endStick);
+    pad.addEventListener("pointercancel", endStick);
+
+    document.querySelectorAll("input[data-pin], input[data-pwm]").forEach((el) => {
+      el.addEventListener("input", () => {
+        pinDuties();
+        writePins();
+      });
+    });
+
+    function onDisconnected() {
+      device = null;
+      driveChar = null;
+      stopChar = null;
+      pinsChar = null;
+      stopDriveLoop();
+      stopPinsLoop();
+      touching = false;
+      left = 0;
+      right = 0;
+      showStick(0, 0, 0, 0);
+      connectBtn.disabled = false;
+      disconnectBtn.disabled = true;
+      setStatus("Disconnected");
+    }
+
+    async function connect() {
+      if (!navigator.bluetooth) {
+        setStatus("Use Chrome or Edge. Web Bluetooth needs https or localhost, not a file:// page.", "err");
+        return;
+      }
+      try {
+        setStatus("Select Dozer…");
+        device = await navigator.bluetooth.requestDevice({
+          filters: [{ name: "Dozer" }],
+          optionalServices: [SERVICE],
+        });
+        device.addEventListener("gattserverdisconnected", onDisconnected);
+        setStatus("Connecting…");
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE);
+        driveChar = await service.getCharacteristic(DRIVE);
+        stopChar = await service.getCharacteristic(STOP);
+        pinsChar = await service.getCharacteristic(PINS);
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+        setStatus("Connected", "ok");
+        if (page === "diag") ensurePinsLoop();
+      } catch (err) {
+        onDisconnected();
+        setStatus(err && err.message ? err.message : "Connect failed", "err");
+      }
+    }
+
+    async function disconnect() {
+      await emergencyStop();
+      try { device && device.gatt && device.gatt.disconnect(); } catch (_) {}
+      onDisconnected();
+    }
+
+    async function emergencyStop() {
+      touching = false;
+      left = 0;
+      right = 0;
+      stopDriveLoop();
+      showStick(0, 0, 0, 0);
+      document.querySelectorAll("input[data-pin]").forEach((box) => { box.checked = false; });
+      pinDuties();
+      await writePins();
+      await writeStop();
+    }
+
+    tabDrive.addEventListener("click", () => showPage("drive"));
+    tabDiag.addEventListener("click", () => showPage("diag"));
+    connectBtn.addEventListener("click", connect);
+    disconnectBtn.addEventListener("click", disconnect);
+    document.getElementById("estop").addEventListener("click", emergencyStop);
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) emergencyStop();
+    });
+    window.addEventListener("pagehide", emergencyStop);
+  </script>
+</body>
+</html>
